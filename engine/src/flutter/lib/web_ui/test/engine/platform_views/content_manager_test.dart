@@ -2,10 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'dart:js_interop';
+
 import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui_web/src/ui_web.dart' as ui_web;
+// ignore: depend_on_referenced_packages
+import 'package:web/web.dart' as web;
 
 import '../../common/test_initialization.dart';
 
@@ -59,6 +63,48 @@ void testMain() {
 
         expect(contentManager.knowsViewId(viewId), isFalse);
         expect(view.parentNode, isNull);
+      });
+
+      test('removes slotted content using its owning ShadowRoot on WebKit', () {
+        final ui_web.BrowserEngine? previousEngine = ui_web.browser.debugBrowserEngineOverride;
+        ui_web.browser.debugBrowserEngineOverride = ui_web.BrowserEngine.webkit;
+        addTearDown(() => ui_web.browser.debugBrowserEngineOverride = previousEngine);
+
+        contentManager.registerFactory(viewType, (int id) => createDomHTMLDivElement());
+        final DomElement host = domDocument.createElement('flt-glass-pane');
+        final DomShadowRoot owningShadowRoot = host.attachShadow(<Object?, Object?>{
+          'mode': 'open',
+        });
+        final DomShadowRoot otherShadowRoot =
+            EnginePlatformDispatcher.instance.implicitView!.dom.renderingHost;
+        final observedRoots = <DomShadowRoot>[owningShadowRoot, otherShadowRoot];
+        final observedMutations = <web.MutationRecord>[];
+        final observer = web.MutationObserver(
+          (JSArray<web.MutationRecord> records, web.MutationObserver observer) {
+            observedMutations.addAll(records.toDart);
+          }.toJS,
+        );
+        for (final root in observedRoots) {
+          observer.observe(root as web.Node, web.MutationObserverInit(childList: true));
+        }
+        addTearDown(() => observer.disconnect());
+
+        final DomElement view = contentManager.renderContent(viewType, viewId, null);
+        host.append(view);
+
+        expect(contentManager.knowsViewId(viewId), isTrue);
+        contentManager.clearPlatformView(viewId);
+        contentManager.clearPlatformView(viewId);
+
+        observedMutations.addAll(observer.takeRecords().toDart);
+        expect(contentManager.knowsViewId(viewId), isFalse);
+        expect(view.parentNode, isNull);
+        expect(
+          observedMutations.map((web.MutationRecord record) => record.target),
+          everyElement(same(owningShadowRoot as web.Node)),
+        );
+        expect(owningShadowRoot.querySelector('slot[name^="tombstone-"]'), isNull);
+        expect(otherShadowRoot.querySelector('slot[name^="tombstone-"]'), isNull);
       });
     });
 

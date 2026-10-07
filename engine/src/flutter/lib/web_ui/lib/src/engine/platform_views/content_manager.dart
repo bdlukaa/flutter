@@ -4,6 +4,7 @@
 
 import 'package:ui/ui_web/src/ui_web.dart' as ui_web;
 
+import '../browser_detection.dart';
 import '../dom.dart';
 import '../util.dart';
 import 'slots.dart';
@@ -176,7 +177,29 @@ class PlatformViewManager {
   /// never been rendered before.
   void clearPlatformView(int viewId) {
     // Remove from our cache, and then from the DOM...
-    _contents.remove(viewId)?.remove();
+    final DomElement? element = _contents.remove(viewId);
+    if (element == null) {
+      return;
+    }
+
+    final DomElement? parent = element.parent;
+    final DomShadowRoot? shadowRoot = parent?.shadowRoot;
+    if (!isSafari || parent == null || shadowRoot == null) {
+      element.remove();
+      return;
+    }
+
+    final tombstoneName = 'tombstone-${element.getAttribute('slot')}';
+    final DomElement tombstone = domDocument.createElement('slot')
+      ..style.display = 'none'
+      ..setAttribute('name', tombstoneName);
+    shadowRoot.append(tombstone);
+    try {
+      element.setAttribute('slot', tombstoneName);
+      element.remove();
+    } finally {
+      tombstone.remove();
+    }
   }
 
   /// Attempt to ensure that the contents of the user-supplied DOM element will
